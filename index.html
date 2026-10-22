@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Student Attendance System</title>
+<style>
+:root{--bg:#f4f6fb;--c:#fff;--t:#1d2433;--m:#6b7280;--p:#2563eb;--g:#16a34a;--r:#dc2626;--y:#d97706;--b:#e3e7ef;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1420;--c:#182033;--t:#e8ecf5;--m:#9aa4b8;--b:#2a3550}}
+:root[data-theme="dark"]{--bg:#0f1420;--c:#182033;--t:#e8ecf5;--m:#9aa4b8;--b:#2a3550}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--t);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.w{max-width:960px;margin:0 auto;padding:14px}
+h1{font-size:20px;margin:4px 0 12px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.tabs button{flex:1;min-width:110px}
+button,input,select,textarea{font:inherit;color:var(--t);background:var(--c);border:1px solid var(--b);border-radius:8px;padding:8px 10px}
+button{cursor:pointer}
+button.on,button.pri{background:var(--p);color:#fff;border-color:var(--p)}
+button.del{color:var(--r)}
+.card{background:var(--c);border:1px solid var(--b);border-radius:12px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.row>*{flex:1;min-width:120px}
+.sc{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid var(--b);padding:7px 8px;text-align:left;white-space:nowrap}
+th{color:var(--m);font-weight:600;font-size:13px}
+.rep td,.rep th{text-align:center;padding:5px 6px;font-size:13px}
+.rep td:first-child,.rep th:first-child{text-align:left;position:sticky;left:0;background:var(--c)}
+.P{color:var(--g);font-weight:700}.A{color:var(--r);font-weight:700}.L{color:var(--y);font-weight:700}
+.cell{cursor:pointer;min-width:26px}
+.seg{display:flex;gap:4px}.seg button{padding:6px 14px}
+.seg .sP{background:var(--g);color:#fff;border-color:var(--g)}.seg .sA{background:var(--r);color:#fff;border-color:var(--r)}.seg .sL{background:var(--y);color:#fff;border-color:var(--y)}
+.m{color:var(--m);font-size:13px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.chip{padding:3px 10px;border-radius:999px;border:1px solid var(--b);font-size:13px}
+textarea{width:100%;min-height:110px;font-family:ui-monospace,monospace;font-size:12px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script></head>
+<body>
+<div id="authPanel" style="max-width:460px;margin:8vh auto;padding:20px;background:var(--c);color:var(--t);border:1px solid var(--b);border-radius:14px">
+  <h1>🔐 Faculty Login</h1>
+  <p class="m">Sign in with your faculty account to access the shared attendance database.</p>
+  <form id="loginForm">
+    <div class="row"><input id="loginEmail" type="email" autocomplete="username" placeholder="Faculty email" required></div>
+    <div class="row"><input id="loginPassword" type="password" autocomplete="current-password" placeholder="Password" required></div>
+    <div class="row"><button class="pri" type="submit">Sign in</button></div>
+  </form>
+  <p id="authMessage" class="m"></p>
+  <p class="m">Faculty accounts are created by the database administrator in Supabase.</p>
+</div>
+<div id="appRoot" style="display:none">
+<div class="w">
+<div class="row"><h1 style="flex:3">📋 Student Attendance System</h1><button onclick="signOutFaculty()">Sign out</button></div>
+<div class="tabs" id="tabs"></div>
+<div id="v"></div>
+</div></div>
+<script>
+const $=s=>document.querySelector(s);
+let S=[],A={},tab='st',editId=null,delId=null,msg='';
+try{S=JSON.parse(localStorage.getItem('sas_s')||'[]');A=JSON.parse(localStorage.getItem('sas_a')||'{}')}catch(e){}
+let supabaseClient=null, currentUser=null, lastRemoteUpdatedAt='', remoteWriteInProgress=false;
+const save=()=>{
+  try{localStorage.setItem('sas_s',JSON.stringify(S));localStorage.setItem('sas_a',JSON.stringify(A))}catch(e){}
+  if(supabaseClient && currentUser && !remoteWriteInProgress){
+    const payload={S,A};
+    supabaseClient.from('shared_state').upsert({id:1,payload,updated_by:currentUser.id,updated_at:new Date().toISOString()})
+      .select('updated_at').single()
+      .then(({data,error})=>{
+        if(error){console.error(error);showSyncStatus('Database save failed: '+error.message)}
+        else {lastRemoteUpdatedAt=data?.updated_at||lastRemoteUpdatedAt;showSyncStatus('Saved to shared database ✓')}
+      });
+  }
+};
+function showSyncStatus(message){
+  const el=document.getElementById('syncStatus');
+  if(el)el.textContent=message;
+}
+function showApp(){
+  document.getElementById('authPanel').style.display='none';
+  document.getElementById('appRoot').style.display='block';
+  if(!document.getElementById('syncStatus')){
+    const s=document.createElement('div');s.id='syncStatus';s.className='m';s.style.cssText='padding:0 14px 12px;text-align:right';
+    document.querySelector('#appRoot .w').appendChild(s);
+  }
+}
+function showLogin(message=''){
+  document.getElementById('authPanel').style.display='block';
+  document.getElementById('appRoot').style.display='none';
+  document.getElementById('authMessage').textContent=message;
+}
+async function loadSharedState(){
+  const {data,error}=await supabaseClient.from('shared_state').select('payload,updated_at').eq('id',1).maybeSingle();
+  if(error)throw error;
+  if(data && data.payload && Array.isArray(data.payload.S) && data.payload.A){
+    S=data.payload.S; A=data.payload.A; lastRemoteUpdatedAt=data.updated_at||'';
+    try{localStorage.setItem('sas_s',JSON.stringify(S));localStorage.setItem('sas_a',JSON.stringify(A))}catch(e){}
+  }else{
+    // First user initializes the shared record using this browser's existing local data.
+    const {data:created,error:createError}=await supabaseClient.from('shared_state')
+      .upsert({id:1,payload:{S,A},updated_by:currentUser.id,updated_at:new Date().toISOString()})
+      .select('updated_at').single();
+    if(createError)throw createError;
+    lastRemoteUpdatedAt=created?.updated_at||'';
+  }
+}
+async function signOutFaculty(){
+  if(supabaseClient)await supabaseClient.auth.signOut();
+  currentUser=null;showLogin('You have been signed out.');
+}
+async function startFacultySession(session){
+  currentUser=session.user;
+  try{
+    await loadSharedState();
+    showApp();R();showSyncStatus('Connected to shared database ✓');
+    startRemoteRefresh();
+  }catch(err){
+    showLogin('Database connection failed: '+(err.message||String(err)));
+  }
+}
+let remoteRefreshTimer=null;
+function startRemoteRefresh(){
+  if(remoteRefreshTimer)clearInterval(remoteRefreshTimer);
+  remoteRefreshTimer=setInterval(async()=>{
+    if(!supabaseClient||!currentUser||remoteWriteInProgress)return;
+    const {data,error}=await supabaseClient.from('shared_state').select('payload,updated_at').eq('id',1).maybeSingle();
+    if(error){showSyncStatus('Sync check failed');return}
+    if(data && data.updated_at && data.updated_at!==lastRemoteUpdatedAt){
+      // Pull updates made by other faculty. Avoid replacing local state while the same tab is writing.
+      remoteWriteInProgress=true;
+      try{
+        S=Array.isArray(data.payload?.S)?data.payload.S:[];
+        A=data.payload?.A&&typeof data.payload.A==='object'?data.payload.A:{};
+        lastRemoteUpdatedAt=data.updated_at;
+        try{localStorage.setItem('sas_s',JSON.stringify(S));localStorage.setItem('sas_a',JSON.stringify(A))}catch(e){}
+        R();showSyncStatus('Shared data refreshed ✓');
+      }finally{remoteWriteInProgress=false}
+    }
+  },10000);
+}
+async function initHosting(){
+  const SUPABASE_URL='https://knknlxcgceyypvwgejzm.supabase.co';
+  const SUPABASE_ANON_KEY='sb_publishable_i8dikIYKcI9m7SdUZ2_ZLA_VMMjmLko';
+  if(!window.supabase || SUPABASE_URL.startsWith('PASTE_') || SUPABASE_ANON_KEY.startsWith('PASTE_')){
+    showLogin('Setup required: add your Supabase Project URL and publishable/anon key in this HTML file.');
+    return;
+  }
+  supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+  document.getElementById('loginForm').addEventListener('submit',async(e)=>{
+    e.preventDefault();
+    const email=document.getElementById('loginEmail').value.trim();
+    const password=document.getElementById('loginPassword').value;
+    document.getElementById('authMessage').textContent='Signing in...';
+    const {data,error}=await supabaseClient.auth.signInWithPassword({email,password});
+    if(error){showLogin('Sign-in failed: '+error.message);return}
+    await startFacultySession(data.session);
+  });
+  const {data:{session}}=await supabaseClient.auth.getSession();
+  if(session)await startFacultySession(session);else showLogin();
+}
+
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const today=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+let date=today(),month=today().slice(0,7),cf='';
+const classes=()=>[...new Set(S.map(s=>s.cls).filter(Boolean))].sort();
+const list=()=>S.filter(s=>(!cf||s.cls===cf)&&(!q||(s.name+' '+s.roll).toLowerCase().includes(q.toLowerCase()))).sort((a,b)=>String(a.roll).localeCompare(String(b.roll),undefined,{numeric:true}));
+const filt=()=>`<select onchange="cf=this.value;R()">${tab==='st'?'<option value="">All classes</option>':''}${classes().map(c=>`<option ${c===cf?'selected':''}>${esc(c)}</option>`).join('')}</select>`;
+function go(t){tab=t;msg='';imsg='';q='';delId=null;R()}
+function R(){
+ if(cf&&!classes().includes(cf))cf='';
+ if(tab!=='st'&&!cf)cf=classes()[0]||'';
+ $('#tabs').innerHTML=[['st','👨‍🎓 Students'],['at','✅ Daily Attendance'],['mo','📊 Monthly Report'],['lk','🔎 Student Lookup'],['dt','💾 Data']].map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="go('${k}')">${l}</button>`).join('');
+ $('#v').innerHTML={st:vSt,at:vAt,mo:vMo,lk:vLk,dt:vDt}[tab]();
+}
+/* ---------- Students: insert / edit / delete ---------- */
+function vSt(){
+ const e=S.find(s=>s.id===editId)||last;
+ return `<div class="card"><b>${editId?'Edit student':'Add new student'}</b>
+ <div class="row" style="margin-top:8px"><input id="roll" placeholder="Roll no." value="${esc(e.roll||'')}"><input id="name" placeholder="Student name" value="${esc(e.name||'')}"></div>
+ <div class="row"><select id="sem"><option value="">Semester</option>${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}" ${String(e.sem)===String(n)?'selected':''}>Semester ${n}</option>`).join('')}</select><input id="br" placeholder="Branch (e.g. CSE)" value="${esc(e.br||'')}"><input id="sec" placeholder="Section (optional)" value="${esc(e.sec||'')}"></div>
+ <div class="row"><button class="pri" onclick="saveSt()">${editId?'Update':'Add student'}</button>${editId?'<button onclick="editId=null;R()">Cancel</button>':''}<span class="m" style="flex:3">${msg}</span></div></div>
+ <div class="card"><div class="row"><b style="flex:2">Students (${list().length})</b>${filt()}${srch()}</div><div class="sc"><table><tr><th>Roll</th><th>Name</th><th>Class</th><th>Minor</th><th></th></tr>
+ ${list().map(s=>`<tr><td>${esc(s.roll)}</td><td>${esc(s.name)}</td><td>${esc(s.cls)}</td><td>${esc(s.minor||'')}</td><td><button onclick="editId=${s.id};msg='';R()">Edit</button> <button class="del" onclick="delSt(${s.id})">${delId===s.id?'Confirm delete?':'Delete'}</button></td></tr>`).join('')||'<tr><td colspan="4" class="m">No students yet. Add one above.</td></tr>'}</table></div></div>`;
+}
+function saveSt(){
+ const roll=$('#roll').value.trim(),name=$('#name').value.trim(),sem=$('#sem').value,br=$('#br').value.trim(),sec=$('#sec').value.trim(),cls=clsLabel(sem,br,sec);
+ if(!sem){msg='Please select a semester.';R();return}
+ last={sem,br,sec};
+ if(!name||!roll){msg='Roll no. and name are required.';R();return}
+ if(S.some(s=>s.roll===roll&&s.cls===cls&&s.id!==editId)){msg='This roll no. already exists in the class.';R();return}
+ if(editId){Object.assign(S.find(s=>s.id===editId),{roll,name,cls,sem,br,sec});editId=null;msg='Student updated.'}
+ else{S.push({id:Date.now(),roll,name,cls,sem,br,sec});msg='Student added.'}
+ save();R();
+}
+function delSt(id){
+ if(delId!==id){delId=id;R();return}
+ S=S.filter(s=>s.id!==id);Object.values(A).forEach(d=>delete d[id]);delId=null;save();R();
+}
+/* ---------- Daily attendance ---------- */
+function vAt(){
+ const d=A[date]||{},l=list();
+ const c={P:0,A:0,L:0};l.forEach(s=>d[s.id]&&c[d[s.id]]++);
+ return `<div class="card"><div class="row"><input type="date" value="${date}" onchange="date=this.value||today();R()">${filt()}${srch()}<button onclick="markAll('P')">All Present</button><button onclick="markAll('')">Clear day</button></div>
+ <div class="m">Present <b class="P">${c.P}</b> · Absent <b class="A">${c.A}</b> · Leave <b class="L">${c.L}</b> · Not marked ${l.length-c.P-c.A-c.L}. Any past date can be edited.</div></div>
+ <div class="card sc"><table><tr><th>Roll</th><th>Name</th><th>Class</th><th>Status</th></tr>
+ ${l.map(s=>`<tr><td>${esc(s.roll)}</td><td>${esc(s.name)}</td><td>${esc(s.cls)}</td><td><div class="seg">${['P','A','L'].map(k=>`<button class="${d[s.id]===k?'s'+k:''}" onclick="mark(${s.id},'${k}')">${k}</button>`).join('')}</div></td></tr>`).join('')||'<tr><td colspan="4" class="m">Add students first.</td></tr>'}</table></div>`;
+}
+function mark(id,k){A[date]=A[date]||{};if(A[date][id]===k)delete A[date][id];else A[date][id]=k;save();R()}
+function markAll(k){A[date]=A[date]||{};list().forEach(s=>k?A[date][s.id]=k:delete A[date][s.id]);save();R()}
+/* ---------- Monthly compiled report ---------- */
+function calc(){
+ const [y,m]=month.split('-').map(Number),n=new Date(y,m,0).getDate();
+ const rows=mlist().map(s=>{
+  const days=[];let p=0,a=0,l=0;
+  for(let i=1;i<=n;i++){const k=`${month}-${String(i).padStart(2,'0')}`,v=(A[k]||{})[s.id]||'';days.push([k,v]);v==='P'?p++:v==='A'?a++:v==='L'&&l++}
+  const t=p+a+l;return {s,days,p,a,l,pct:t?Math.round(p/t*100):0,t};
+ });
+ return {n,rows};
+}
+function vMo(){
+ if(ms===null)ms=[...new Set(S.map(s=>String(s.sem||'')).filter(Boolean))].sort((a,b)=>a-b)[0]||'';
+ const qs=mq.trim(),cs=[...new Set(S.filter(s=>!ms||String(s.sem)===ms).map(s=>s.cls))].sort();
+ if(mc&&!cs.includes(mc))mc='';
+ const semBar=['',1,2,3,4,5,6,7,8].map(n=>`<button class="${!qs&&ms===String(n)?'on':''}" onclick="ms='${n}';mc='';mq='';R()">${n===''?'All':'Sem '+n}</button>`).join('');
+ const clsSel=cs.length>1&&!qs?`<div class="row"><select onchange="mc=this.value;R()"><option value="">All classes${ms?' in Semester '+ms:''}</option>${cs.map(c=>`<option ${c===mc?'selected':''}>${esc(c)}</option>`).join('')}</select></div>`:'';
+ const {n,rows}=calc();
+ const showC=qs||(!mc&&cs.length>1);
+ const info=qs?`Search results across all semesters: ${rows.length} student(s)`:`${ms?'Semester '+ms:'All semesters'}${mc?' · '+esc(mc):''}: ${rows.length} students`;
+ return `<div class="card"><div class="row"><input type="month" value="${month}" onchange="month=this.value||today().slice(0,7);R()"><input id="mq" placeholder="Search any student (roll / name, all semesters)" value="${esc(mq)}" oninput="mq=this.value;R();const e=$('#mq');e.focus();e.setSelectionRange(mq.length,mq.length)"></div>
+ <div class="row">${semBar}</div>${clsSel}<div class="m">${info}. Tap any cell to edit: P → A → L → blank.</div></div>
+ <div class="card sc"><table class="rep"><tr><th>Student</th>${Array.from({length:n},(_,i)=>`<th>${i+1}</th>`).join('')}<th>P</th><th>A</th><th>L</th><th>%</th></tr>
+ ${rows.map(r=>`<tr><td>${esc(r.s.roll)}. ${esc(r.s.name)}${showC?` <span class="m">(${esc(r.s.cls)})</span>`:''}</td>${r.days.map(([k,v])=>`<td class="cell ${v}" onclick="cyc('${k}',${r.s.id})">${v||'·'}</td>`).join('')}<td class="P">${r.p}</td><td class="A">${r.a}</td><td class="L">${r.l}</td><td><b style="color:${r.pct>=75?'var(--g)':'var(--r)'}">${r.t?r.pct+'%':'-'}</b></td></tr>`).join('')||`<tr><td class="m">No students.</td></tr>`}</table></div>`;
+}
+function cyc(k,id){A[k]=A[k]||{};const o=['P','A','L',''],i=o.indexOf(A[k][id]||''),v=o[(i+1)%4];v?A[k][id]=v:delete A[k][id];save();R()}
+/* ---------- CSV + backup ---------- */
+function csv(){
+ const {n,rows}=calc();
+ const h=['Roll','Name','Class',...Array.from({length:n},(_,i)=>i+1),'Present','Absent','Leave','Percent'];
+ const q=x=>`"${String(x).replace(/"/g,'""')}"`;
+ return [h.map(q).join(','),...rows.map(r=>[r.s.roll,r.s.name,r.s.cls,...r.days.map(d=>d[1]),r.p,r.a,r.l,r.t?r.pct+'%':''].map(q).join(','))].join('\n');
+}
+function vDt(){
+ return `<div class="card"><b>📥 Import from Excel</b>
+ <div class="m" style="margin:4px 0 10px"><b>Class file import</b> (like CE-_7th_Sem.xlsx): a separate sheet for each month. Columns: Sr No., Registration No., Name, (Minor Degree Preference), then one column per lecture date containing P / A. Students and their attendance are imported together. Semester and Branch are read from the file name; if the name does not contain them, choose them below.</div>
+ <div class="row"><select id="isem"><option value="">Semester (auto from file name)</option>${[1,2,3,4,5,6,7,8].map(n=>`<option value="${n}">Semester ${n}</option>`).join('')}</select><input id="ibr" placeholder="Branch (auto from file name, e.g. CE)"><input id="isec" placeholder="Section (optional)"></div>
+ <div class="row"><input type="file" accept=".xlsx,.xls" onchange="imp(this,'m')"></div>
+ <details style="margin-top:8px"><summary class="m" style="cursor:pointer">Old list format (Roll, Name, Semester / Date, Roll, Status)</summary><div class="m" style="margin:4px 0 10px">The first row must contain column headings. File types: .xlsx, .xls or .csv</div>
+ <div class="row"><div><b>1. Students file</b><div class="m">Columns: Roll, Name, Semester, Branch, Section (Branch/Section optional). One file can contain students of all semesters.</div><input type="file" accept=".xlsx,.xls,.csv" onchange="imp(this,'s')"></div>
+ <div><b>2. Attendance file</b><div class="m">Columns: Date, Roll, Semester, Branch, Section, Status (P / A / L)</div><input type="file" accept=".xlsx,.xls,.csv" onchange="imp(this,'a')"></div></div>
+ </details>
+ <div class="m" style="margin-top:8px"><b>${imsg}</b></div>
+ <div class="m" style="margin-top:6px">Date format: 2026-10-16 or 16/10/2026. Upload the Students file first, then the Attendance file. A student with the same Roll and class is not added twice; only the name is updated. Attendance for the same date and student is replaced by the new value.</div></div>
+ <div class="card"><b>Monthly report as CSV (${month})</b><div class="m">Select all, copy, paste into Excel / Google Sheets. It uses the semester, class and search currently selected in the Monthly Report tab.</div>
+ <textarea readonly onclick="this.select()">${esc(csv())}</textarea></div>
+ <div class="card"><b>Backup / Restore</b><div class="m">Data is saved in this browser. Copy the text below to keep a backup; paste a backup here and press Restore to load it.</div>
+ <textarea id="bk" onclick="this.select()">${esc(JSON.stringify({S,A}))}</textarea>
+ <div class="row" style="margin-top:8px"><button class="pri" onclick="restore()">Restore from text</button><span class="m" style="flex:3">${msg}</span></div></div>`;
+}
+/* ---------- Student lookup ---------- */
+let sv='',sq='',sid=null,lc='',ms=null,mc='',mq='';
+const mlist=()=>{const t=mq.trim().toLowerCase();return S.filter(s=>t?(s.roll+' '+s.name).toLowerCase().includes(t):((!ms||String(s.sem)===ms)&&(!mc||s.cls===mc))).sort((a,b)=>String(a.cls).localeCompare(String(b.cls))||String(a.roll).localeCompare(String(b.roll),undefined,{numeric:true}))};
+function stats(id){let p=0,a=0,l=0;for(const d in A){const v=A[d][id];if(v==='P')p++;else if(v==='A')a++;else if(v==='L')l++}const t=p+a+l;return{p,a,l,t,pct:t?Math.round(p/t*100):0}}
+const pc=k=>k.t?`<b style="color:${k.pct>=75?'var(--g)':'var(--r)'}">${k.pct}%</b>`:'-';
+const tbl=l=>`<table><tr><th>Roll</th><th>Name</th><th>Class</th><th>Lectures</th><th>P</th><th>A</th><th>L</th><th>%</th><th></th></tr>${l.map(s=>{const k=stats(s.id);return `<tr><td>${esc(s.roll)}</td><td>${esc(s.name)}</td><td>${esc(s.cls)}</td><td>${k.t}</td><td class="P">${k.p}</td><td class="A">${k.a}</td><td class="L">${k.l}</td><td>${pc(k)}</td><td><button onclick="sq='';sid=${s.id};R()">View</button></td></tr>`}).join('')}</table>`;
+function vStu(s,back){
+ const k=stats(s.id),ds=Object.keys(A).filter(d=>A[d][s.id]).sort(),mo={};
+ ds.forEach(d=>{const m=d.slice(0,7);(mo[m]=mo[m]||{P:0,A:0,L:0})[A[d][s.id]]++});
+ const fm=m=>new Date(m+'-01T00:00:00').toLocaleString('en-GB',{month:'long',year:'numeric'});
+ const fd=d=>new Date(d+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',weekday:'short'});
+ const box=(l,v)=>`<div><div class="m">${l}</div><b>${v}</b></div>`;
+ return `<div class="card"><div class="row"><b style="flex:3;font-size:17px">${esc(s.name)}</b>${back?'<button onclick="sid=null;R()">← Back</button>':''}</div>
+ <div class="m">Roll: ${esc(s.roll)} · ${esc(s.cls)}${s.minor?' · Minor: '+esc(s.minor):''}</div>
+ <div class="row" style="margin-top:10px">${box('Lectures',k.t)}${box('Present','<span class="P">'+k.p+'</span>')}${box('Absent','<span class="A">'+k.a+'</span>')}${box('Leave','<span class="L">'+k.l+'</span>')}${box('Attendance',pc(k))}</div></div>
+ <div class="card sc"><b>Month-wise</b><table><tr><th>Month</th><th>Present</th><th>Absent</th><th>Leave</th><th>%</th></tr>${Object.keys(mo).sort().map(m=>{const x=mo[m],t=x.P+x.A+x.L;return `<tr><td>${fm(m)}</td><td class="P">${x.P}</td><td class="A">${x.A}</td><td class="L">${x.L}</td><td>${pc({t,pct:Math.round(x.P/t*100)})}</td></tr>`}).join('')||'<tr><td class="m">No attendance recorded yet.</td></tr>'}</table></div>
+ <div class="card"><b>Date-wise</b><div class="chips">${ds.map(d=>`<span class="chip ${A[d][s.id]}">${fd(d)} · ${A[d][s.id]}</span>`).join('')||'<span class="m">No attendance recorded yet.</span>'}</div></div>`;
+}
+function vLk(){
+ const t=sq.trim().toLowerCase();
+ let h=`<div class="card"><b>Check a student by roll number</b><div class="row" style="margin-top:8px"><input id="rq" placeholder="Enter roll / registration no. or name" value="${esc(sq)}" oninput="sq=this.value;R();const e=$('#rq');e.focus();e.setSelectionRange(sq.length,sq.length)"></div></div>`;
+ if(t){
+  const m=S.filter(s=>(s.roll+' '+s.name).toLowerCase().includes(t));
+  return h+(m.length===1?vStu(m[0]):`<div class="card sc"><b>${m.length} student(s) found</b>${m.length?tbl(m):''}</div>`);
+ }
+ h+=`<div class="card"><b>Or select a semester</b><div class="row" style="margin-top:8px">${[1,2,3,4,5,6,7,8].map(n=>`<button class="${sv===String(n)?'on':''}" onclick="sv='${n}';sid=null;lc='';R()">Semester ${n}</button>`).join('')}</div></div>`;
+ const st=sid&&S.find(s=>s.id===sid);
+ if(st)return h+vStu(st,true);
+ if(!sv)return h+'<div class="m">Choose a semester to see the full attendance of all its students.</div>';
+ let l=S.filter(s=>String(s.sem)===sv);
+ const cs=[...new Set(l.map(s=>s.cls))].sort();
+ if(lc&&!cs.includes(lc))lc='';
+ if(lc)l=l.filter(s=>s.cls===lc);
+ l.sort((a,b)=>a.cls.localeCompare(b.cls)||String(a.roll).localeCompare(String(b.roll),undefined,{numeric:true}));
+ return h+`<div class="card sc"><div class="row"><b style="flex:2">Semester ${sv}: ${l.length} students</b>${cs.length>1?`<select onchange="lc=this.value;R()"><option value="">All classes</option>${cs.map(c=>`<option ${c===lc?'selected':''}>${esc(c)}</option>`).join('')}</select>`:''}</div>${l.length?tbl(l):'<div class="m">No students in this semester yet.</div>'}</div>`;
+}
+/* ---------- Excel import ---------- */
+let imsg='',q='',last={};
+const clsLabel=(sem,br,sec)=>[sem?'Sem '+sem:'',br,sec?'Sec '+sec:''].filter(Boolean).join(' · ');
+const srch=()=>`<input id="q" placeholder="Search name / roll" value="${esc(q)}" oninput="q=this.value;R();const e=$('#q');e.focus();e.setSelectionRange(q.length,q.length)">`;
+function cinfo(x){
+ const sem=(pick(x,'semester','sem').match(/\d+/)||[''])[0],br=pick(x,'branch','department','dept'),sec=pick(x,'section','sec'),ex=pick(x,'class','classname');
+ return {sem,br,sec,ex,cls:ex||clsLabel(sem,br,sec)};
+}
+const eq=(a,b)=>String(a||'').toLowerCase()===String(b||'').toLowerCase();
+const nk=o=>{const x={};for(const k in o)x[k.toLowerCase().replace(/[^a-z]/g,'')]=String(o[k]).trim();return x};
+const pick=(x,...ks)=>{for(const k of ks)if(x[k]!==undefined&&x[k]!=='')return x[k];return''};
+function nd(v){let m=v.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/);
+ if(m)return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+ m=v.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})$/);
+ return m?`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`:''}
+function imp(inp,kind){
+ const f=inp.files[0];if(!f)return;
+ if(typeof XLSX==='undefined'){imsg='The Excel reader could not load. Check your internet connection and reload the page.';R();return}
+ const r=new FileReader();
+ r.onload=e=>{
+  try{
+   const wb=XLSX.read(e.target.result,{type:'array'});
+   const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:'',raw:false,dateNF:'yyyy-mm-dd'});
+   imsg=kind==='m'?impMx(wb,f.name):kind==='s'?impSt(rows):impAt(rows);save();
+  }catch(x){imsg='Could not read the file. Please use an .xlsx, .xls or .csv file.'}
+  R();
+ };
+ r.readAsArrayBuffer(f);
+}
+function impMx(wb,fn){
+ const pm=fn.replace(/\.[^.]+$/,'').match(/([A-Za-z]{2,})[^A-Za-z0-9]*(\d+)\s*(?:st|nd|rd|th)?[^A-Za-z0-9]*sem/i);
+ const sem=$('#isem').value||(pm?pm[2]:''),br=$('#ibr').value.trim()||(pm?pm[1].toUpperCase():''),sec=$('#isec').value.trim();
+ if(!sem)return 'Could not detect the semester. Choose a semester or name the file like CE-_7th_Sem.xlsx.';
+ const cls=clsLabel(sem,br,sec),used=[],seen=new Set(),base=Date.now()*1000;let a=0,n=0;
+ wb.SheetNames.forEach(sn=>{
+  const g=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:''});
+  if(!g.length)return;
+  const h=g[0].map(v=>String(v).toLowerCase());
+  const ci=h.findIndex(v=>/reg|roll|enrol/.test(v)),ni=h.findIndex(v=>v.trim()==='name'),mi=h.findIndex(v=>/minor/.test(v));
+  if(ci<0||ni<0)return;
+  const cols=[];
+  g[0].forEach((v,i)=>{
+   let d='';
+   if(typeof v==='number'&&v>30000&&v<80000){const p=XLSX.SSF.parse_date_code(v);d=`${p.y}-${String(p.m).padStart(2,'0')}-${String(p.d).padStart(2,'0')}`}
+   else if(typeof v==='string')d=nd(v.trim());
+   if(d)cols.push([i,d]);
+  });
+  used.push(sn.trim());
+  g.slice(1).forEach(r=>{
+   const roll=String(r[ci]).trim(),name=String(r[ni]).trim();
+   if(!roll||!name)return;
+   const mn=mi>=0?String(r[mi]).trim():'';
+   let s=S.find(t=>t.roll===roll&&t.cls===cls);
+   if(s){s.name=name;if(mn)s.minor=mn}
+   else{s={id:base+a,roll,name,cls,sem,br,sec};if(mn)s.minor=mn;S.push(s);a++}
+   seen.add(s.id);
+   cols.forEach(([i,d])=>{const v=({P:'P',PRESENT:'P',A:'A',ABSENT:'A',L:'L',LEAVE:'L'})[String(r[i]).trim().toUpperCase()];if(v){(A[d]=A[d]||{})[s.id]=v;n++}});
+  });
+ });
+ if(!used.length)return 'No sheet found with Registration/Roll and Name columns.';
+ return `${cls}: ${seen.size} students (${a} new), ${n} attendance entries imported. Sheets: ${used.join(', ')}.`;
+}
+function impSt(rows){
+ let a=0,u=0,s=0;const base=Date.now()*1000;
+ rows.forEach(o=>{
+  const x=nk(o),roll=pick(x,'roll','rollno','rollnumber','id'),name=pick(x,'name','studentname'),{cls,sem,br,sec}=cinfo(x);
+  if(!roll||!name||!cls){s++;return}
+  const ex=S.find(t=>t.roll===roll&&t.cls===cls);
+  if(ex){ex.name=name;u++}else{S.push({id:base+a,roll,name,cls,sem,br,sec});a++}
+ });
+ return `${a} new students added, ${u} updated, ${s} rows skipped (Roll or Name missing).`;
+}
+function impAt(rows){
+ let n=0,s=0;
+ rows.forEach(o=>{
+  const x=nk(o),d=nd(pick(x,'date','dt','day')),roll=pick(x,'roll','rollno','rollnumber'),c=cinfo(x);
+  const st=({p:'P',present:'P',a:'A',absent:'A',l:'L',leave:'L'})[pick(x,'status','attendance','att').toLowerCase()];
+  const m=S.filter(t=>t.roll===roll&&(!c.ex||t.cls===c.ex)&&(!c.sem||eq(t.sem,c.sem))&&(!c.br||eq(t.br,c.br))&&(!c.sec||eq(t.sec,c.sec)));
+  if(!d||!st||m.length!==1){s++;return}
+  (A[d]=A[d]||{})[m[0].id]=st;n++;
+ });
+ return `${n} attendance records imported, ${s} rows skipped (invalid date/status or student not found).`;
+}
+function restore(){
+ try{const d=JSON.parse($('#bk').value);if(!Array.isArray(d.S)||typeof d.A!=='object')throw 0;S=d.S;A=d.A;save();msg='Restored.'}catch(e){msg='Invalid backup text.'}R();
+}
+initHosting();
+</script></body></html>
